@@ -8,62 +8,136 @@ import pandas as pd
 import statsmodels.api as sm
 import xarray as xr
 from numpy import cos, sin, pi, absolute, arange
-from scipy.signal import kaiserord, lfilter, firwin, freqz, filtfilt
+from scipy.signal import kaiserord, lfilter, firwin, freqz, filtfilt, butter
 from pylab import figure, clf, plot, xlabel, ylabel, xlim, ylim, title, grid, axes, show
 
+def butter_lowpass(cutoff, fs, order=5):
+    nyq = 0.5 * fs
+    normal_cutoff = cutoff / nyq
+    b, a = butter(order, normal_cutoff, btype='low', analog=False)
+    return b, a
 
-def plot_filter(w, h, nyq_rate, cutoff_hz, width, ripple_db):
-    plt.plot((w / np.pi) * nyq_rate, 20 * np.log10(np.abs(h)), linewidth=2)
+def butter_highpass(cutoff, fs, order=5):
+    nyq = 0.5 * fs
+    normal_cutoff = cutoff / nyq
+    b, a = butter(order, normal_cutoff, btype='high', analog=False)
+    return b, a
 
-    plt.axvline(cutoff_hz + width * nyq_rate, linestyle='--', linewidth=1, color='g')
-    plt.axvline(cutoff_hz - width * nyq_rate, linestyle='--', linewidth=1, color='g')
-    plt.axhline(-ripple_db, linestyle='--', linewidth=1, color='c')
-    delta = 10 ** (-ripple_db / 20)
-    plt.axhline(20 * np.log10(1 + delta), linestyle='--', linewidth=1, color='r')
-    plt.axhline(20 * np.log10(1 - delta), linestyle='--', linewidth=1, color='r')
+def butter_filter(data, cutoff, fs, order=5, is_lowpass = True, plot_enable = True):
+    if is_lowpass is True:
+        b, a = butter_lowpass(cutoff, fs, order=order)
+    else:
+        b, a = butter_highpass(cutoff, fs, order=order)
 
-    plt.xlabel('Frequency (Hz)')
-    plt.ylabel('Gain (dB)')
-    plt.title('Frequency Response')
-    plt.ylim(-40, 5)
-    plt.grid(True)
+    if plot_enable is True:
+        # Plotting the frequency response.
+        w, h = freqz(b, a, worN=8000)
+        plt.plot(0.5 * fs * w / np.pi, np.abs(h), 'b')
+        plt.plot(cutoff, 0.5 * np.sqrt(2), 'ko')
+        plt.axvline(cutoff, color='k')
+        plt.xlim(0, 0.5 * fs)
+        plt.title("Filter Frequency Response, Cutoff_Freq = " + str(cutoff))
+        plt.xlabel('Frequency [Hz]')
+        plt.grid()
+        plt.legend()
+        plt.show()
 
+    y = filtfilt(b, a, data)
+    return y
 
-def filter_signal(x, is_low_pass, fs, cutoff_freq, plot):
-    # FIR Filter
-    nyq_rate = fs / 2.0
-
-    # Width of the roll-off region.
-    width = 1 / nyq_rate
-
-    # Attenuation in the stop band.
-    ripple_db = 40.0
-
-    num_of_taps, beta = kaiserord(ripple_db, width)
-    if num_of_taps % 2 == 0:
-        num_of_taps = num_of_taps + 1
-
-    cutoff_hz = 14
-    taps = firwin(num_of_taps, cutoff_freq / nyq_rate, window=('kaiser', beta), pass_zero=is_low_pass)
-    w, h = freqz(taps, worN=4000)
-
-    if plot:
-        plot_filter(w, h, nyq_rate, cutoff_hz, width, ripple_db)
-
-    return filtfilt(taps, 1.0, x=x)
-
-def calculate_fft(x, fft_samples, plot):
+def calculate_fft(x, fft_samples, sample_frequency, plot_enable, title_string):
     # FFT Magic
-    y_fft = np.fft.rfft(temperature_data, n=N)
-    x_fft = np.fft.rfftfreq(N, d=1 / fs)
+    y_fft = np.fft.rfft(x, n=fft_samples)
+    x_fft = np.fft.rfftfreq(fft_samples, d=1.0 / sample_frequency)
 
-    if plot is True:
-        plt.stem(x_fft, np.abs(y_fft) / n)
+    # Apply 1/n Normalization
+    if plot_enable is True:
+        plt.stem(x_fft, np.abs(y_fft) / x.shape[0])
         plt.xlabel('f [1/Months]')
         plt.ylabel('FFT Amplitude |T(f)|')
-        plt.title('FFT of T(t)')
+        plt.title(title_string)
 
     return x_fft, y_fft
+
+
+def process_data_frame(data_frame, title_string):
+    rows_before_clear = data_frame.shape[0]
+    data_frame = data_frame.dropna()
+    rows_after_clear = data_frame.shape[0]
+
+    offset = rows_before_clear - rows_after_clear
+
+    temperature_data = data_frame['Temperature']
+    months_data = data_frame['Months'] - offset
+
+    # Remove Average
+    # temperature_data = data_frame['Temperature'] - np.average(data_frame['Temperature'])
+
+    # Filter Signal (Aliasing Filter, Cutoff Frequency 14 Hertz)
+    # temperature_data = filter_signal(temperature_data, True, fs, 14.0, True)
+    # temperature_data = filter_signal(temperature_data, False, fs, 0.1, True)
+
+    # Take every nth Element
+    # temperature_data =
+    # months_data = df['Months'][1::fs] - offset
+
+    # Signal length (amount of rows)
+    # n = temperature_data.shape[0]
+
+    # sample frequency = 1 month
+    fs = 1.0
+    # FFT SAMPLE COUNT
+    sample_count = 1024
+
+    # Apply High pass to remove Offset
+    data_without_bias = butter_filter(data=temperature_data, fs=fs,
+                  cutoff=1.0 / 100.0, is_lowpass=False, plot_enable=True)
+
+    plt.subplot(2, 1, 1)
+
+    plt.plot(months_data, temperature_data)
+    plt.title('Raw Temperature Data, ' + title_string)
+    plt.xlabel('t [Months]')
+    plt.ylabel('T(t) [Kelvin]')
+
+    plt.subplot(2, 1, 2)
+
+    # Apply Hanning Window
+    data_without_bias_win = np.multiply(np.hanning(data_without_bias.size), data_without_bias)
+
+    plt.plot(months_data, data_without_bias)
+    plt.title('High Pass Temperature Data, ' + title_string)
+    plt.xlabel('t [Months]')
+    plt.ylabel('T(t) [Kelvin]')
+
+    plt.tight_layout()
+    plt.show()
+
+    plt.subplot(3, 1, 1)
+    calculate_fft(x=temperature_data, sample_frequency=fs, fft_samples=sample_count,
+                  plot_enable=True, title_string='T(f) FFT Unfiltered T(t), ' + title_string)
+
+    plt.subplot(3, 1, 2)
+    calculate_fft(x=data_without_bias, sample_frequency=fs, fft_samples=sample_count,
+                  plot_enable=True, title_string='T(f) FFT of T(t) with Highpass, ' + title_string)
+
+    plt.subplot(3, 1, 3)
+    calculate_fft(x=data_without_bias_win, sample_frequency=fs, fft_samples=sample_count,
+                  plot_enable=True, title_string='T(f) FFT of T(t) with Highpass, Hanning Window, ' + title_string)
+
+    plt.tight_layout()
+    plt.show()
+
+    number_of_lags = 30
+    temp_autocorr = sm.tsa.acf(temperature_data, nlags=number_of_lags)
+
+    plt.stem(np.arange(0, number_of_lags + 1, 1), temp_autocorr)
+    plt.xlabel('Lag')
+    plt.ylabel('Correlation Coefficient')
+    plt.title('Autocorrelation of raw T(t), ' + title_string)
+
+    plt.tight_layout()
+    plt.show()
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
@@ -77,11 +151,6 @@ if __name__ == '__main__':
     # Index ist 7
     # Latitude / Longitude Gleich
 
-    # sample frequency = 1 month
-    fs = 32
-    # FFT SAMPLE COUNT
-    N = 128
-
     temperatures = rich17dataset.temperature.isel(pressure=11, longitude_bins=21, latitude_bins=14).to_numpy()
     time = rich17dataset.temperature.isel(pressure=11, longitude_bins=21, latitude_bins=14).time.to_numpy()
 
@@ -91,85 +160,17 @@ if __name__ == '__main__':
     df = pd.DataFrame(data=numpy_data).T
     df.columns = ['Temperature', 'Time', 'Months']
 
-    rows_before_clear = df.shape[0]
-    df = df.dropna()
-    rows_after_clear = df.shape[0]
+    process_data_frame(df, '85000 Pascal')
 
-    offset = rows_before_clear - rows_after_clear
+    temperatures2 = rich17dataset.temperature.isel(pressure=7, longitude_bins=21, latitude_bins=14).to_numpy()
+    time2 = rich17dataset.temperature.isel(pressure=7, longitude_bins=21, latitude_bins=14).time.to_numpy()
 
-    plt.subplot(2, 2, 1)
+    frame = [temperatures2, time2, np.arange(0, time2.size)]
+    numpy_data = np.array(frame)
 
-    plt.plot(df['Months'] - offset, df['Temperature'])
-    plt.title('Raw Temperature Data')
-    plt.xlabel('t [Months]')
-    plt.ylabel('T(t) [Kelvin]')
+    df2 = pd.DataFrame(data=numpy_data).T
+    df2.columns = ['Temperature', 'Time', 'Months']
 
-    # Remove Average
-    temperature_data = df['Temperature'] - np.average(df['Temperature'])
-
-    # Filter Signal (Aliasing Filter, Cutoff Frequency 14 Hertz)
-    # temperature_data = filter_signal(temperature_data, True, fs, 14.0, True)
-    # temperature_data = filter_signal(temperature_data, False, fs, 0.1, True)
-
-    # Take every nth Element
-    temperature_data = temperature_data[1::fs]
-    months_data = df['Months'][1::fs] - offset
-
-    # Signal length (amount of rows)
-    n = temperature_data.shape[0]
-
-    # Apply Hanning Window
-    temperature_data = np.multiply(np.hanning(temperature_data.size), temperature_data)
-
-    # Apply 1/n Normalization
-    temperature_data = temperature_data / n
-
-    plt.subplot(2, 2, 2)
-
-    plt.plot(months_data, temperature_data)
-    plt.title('Pre-Edited Temperature Data')
-    plt.xlabel('t [Months]')
-    plt.ylabel('T(t) [Kelvin]')
-
-    # FFT Magic
-    temperature_fft = np.fft.rfft(temperature_data, n=N)
-    x_fft = np.fft.rfftfreq(N, d=1 / fs)
-
-    # Shift the zero-frequency component to the center of the spectrum.
-    # temperature_fft_shifted = np.fft.fftshift(temperature_fft)
-
-    plt.subplot(2, 2, 3)
-
-    plt.stem(x_fft, np.abs(temperature_fft) / n)
-    plt.xlabel('f [1/Months]')
-    plt.ylabel('FFT Amplitude |T(f)|')
-    plt.title('FFT of T(t)')
-
-    number_of_lags = 30
-    temp_autocorr = sm.tsa.acf(df['Temperature'], nlags=number_of_lags)
-
-    plt.subplot(2, 2, 4)
-
-    plt.stem(np.arange(0, number_of_lags + 1, 1), temp_autocorr)
-    plt.xlabel('Lag')
-    plt.ylabel('Correlation Coefficient')
-    plt.title('Autocorrelation of T(t)')
-
-    plt.tight_layout()
-    plt.show()
-
-    figure()
-    plt.subplot(2, 2, 1)
-    temperature_data_filtered = filter_signal(temperature_data, is_low_pass=True, fs=fs, cutoff_freq=14, plot=True)
-    plt.subplot(2, 2, 2)
-    calculate_fft(temperature_data_filtered, fft_samples=N, plot=True)
-    plt.subplot(2, 2, 3)
-    temperature_data_filtered_filtered = filter_signal(temperature_data, is_low_pass=False, fs=fs, cutoff_freq=9, plot=True)
-    plt.subplot(2, 2, 4)
-    calculate_fft(temperature_data_filtered_filtered, fft_samples=N, plot=True)
-
-    plt.tight_layout()
-    plt.show()
-
+    process_data_frame(df2, '30000 Pascal')
 
 # See PyCharm help at https://www.jetbrains.com/help/pycharm/
