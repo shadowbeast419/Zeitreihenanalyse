@@ -113,6 +113,13 @@ def process_data_frame(data_frame, title_string):
     plt.tight_layout()
     plt.show()
 
+    plt.plot(months_data, data_without_bias_win)
+    plt.title('High Pass Temperature Data with Hanning Window, ' + title_string)
+    plt.xlabel('t [Months]')
+    plt.ylabel('T(t) [Kelvin]')
+    plt.tight_layout()
+    plt.show()
+
     plt.subplot(3, 1, 1)
     calculate_fft(x=temperature_data, sample_frequency=fs, fft_samples=sample_count,
                   plot_enable=True, title_string='T(f) FFT Unfiltered T(t), ' + title_string)
